@@ -30,8 +30,6 @@ class EmbeddingLayer():
         self.device = device
         self.vocab_size = vocab_size
 
-        self.W = torch.randn(embed_dim, vocab_size, device=self.device) * math.sqrt(2.0 / vocab_size)
-
     def forward(self, tokens):
         """
         Compute the forward pass of the embedding layer.
@@ -46,13 +44,10 @@ class EmbeddingLayer():
         self.tokens = tokens
 
         # W[:, tokens] gives (embedding_dim, batch_size, sequence_length). 
-        embeddings = self.W[:, tokens]
 
         # Move E to last axis -> (batch_size, sequence_length, embedding_dim)
-        embeddings = embeddings.permute(1, 2, 0)
 
         # Return contiguous tensor for memory contiguity
-        return embeddings.contiguous()
 
     def backward(self, dY):
         """
@@ -68,14 +63,7 @@ class EmbeddingLayer():
         tokens = self.tokens
         embedding_dim, vocab_size = self.W.shape
 
-        self.dW = torch.zeros(embedding_dim, vocab_size, device=dY.device, dtype=dY.dtype)
-
-        batch_size, sequence_length = tokens.shape
-        tokens_flat = tokens.reshape(batch_size * sequence_length)
-        dY_flat = dY.reshape(batch_size * sequence_length, embedding_dim).T
-
         # accumulate columns: dW[:, tokens_flat[k]] += dY_flat[:, k]
-        self.dW.index_add_(dim=1, index=tokens_flat, source=dY_flat)
 
     def update(self, lr):
         """
@@ -89,4 +77,4 @@ class EmbeddingLayer():
         """
 
         # Update the weights of the layer using the learning rate
-        self.W -= lr * self.dW
+        pass

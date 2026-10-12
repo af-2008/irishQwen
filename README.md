@@ -2,7 +2,9 @@
 
 Classroom version of Qwen3 for CSE 10124 — Building ChatGPT.
 
-An educational implementation using PyTorch tensor operations and explicit forward/backward methods. It includes grouped-query attention with QK normalization, rotary position embeddings, RMSNorm, SwiGLU, optional sparse mixture-of-experts blocks, and KV-cached generation.
+An educational implementation using PyTorch tensor operations and explicit forward/backward methods. It includes grouped-query attention with QK normalization, rotary position embeddings, RMSNorm, SwiGLU, KV-cached generation.
+
+Several layer calculations are intentionally left unfinished as teaching exercises. Imports and CLI help work, but training and generation require completing those exercises. This version supports dense Qwen3 only.
 
 ## Setup
 
@@ -39,12 +41,12 @@ python scripts/import_qwen3.py
 This downloads model weights from Hugging Face and creates a roughly 2.2 GB float32 checkpoint plus tokenizer assets in `Datasets/`. Allow sufficient disk space and memory for both the original and converted weights. These generated assets are not included in the repository.
 
 ```python
-from irishQwen.irishQwen_kv import IrishQwenKV
+from irishQwen.irishQwen import IrishQwen
 from irishQwen.qwen_tokenizer import QwenTokenizer
 
 checkpoint = "Datasets/qwen3_0.6b_converted.pt"
 tokenizer = QwenTokenizer("Datasets/qwen3_tokenizer_assets/tokenizer.json")
-model = IrishQwenKV.from_checkpoint_config(checkpoint)
+model = IrishQwen.from_checkpoint_config(checkpoint)
 model.load_converted_qwen3_checkpoint(checkpoint)
 prompt = tokenizer.chat_prompt("What is a transformer?")
 tokens = model.chat(prompt, max_new_tokens=100, **model.NON_THINKING_SAMPLING)
@@ -54,9 +56,8 @@ print(tokenizer.decode(tokens))
 ## Code map
 
 - `irishQwen/irishQwen.py`: model, manual training operations, checkpoints, and sampling.
-- `irishQwen/irishQwen_kv.py`: cached inference with prefill and decode.
-- `irishQwen/qwen_transformer*.py`: dense/MoE decoder blocks and cached attention.
-- `irishQwen/grouped_query_attention.py`, `rotary_embedding.py`, `rms_norm.py`, `swiglu.py`, and `qwen_moe.py`: architectural building blocks.
+- `irishQwen/qwen_transformer.py`: dense decoder blocks and per-block KV cache.
+- `irishQwen/grouped_query_attention.py`, `rotary_embedding.py`, `rms_norm.py`, and `swiglu.py`: architectural building blocks.
 - `irishQwen/qwen_tokenizer.py`: byte-level BPE tokenizer and chat prompt formatting.
 - `scripts/import_qwen3.py`: Hugging Face checkpoint conversion.
 - `train_qwen_shakespeare.py`: small-model training example.

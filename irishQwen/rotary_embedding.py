@@ -47,14 +47,12 @@ class RotaryEmbedding:
         X: (B, H, T, Dh). start_pos is the absolute position of X[..., 0, :]
         (non-zero when decoding with a KV cache).
         """
-        cos, sin = self._tables(X.shape[-2], start_pos)
-        return X * cos + self._rotate_half(X) * sin
+        pass
 
     def backward(self, dY, start_pos=0):
         # A rotation's gradient is the rotation by the opposite angle.
         # (The transpose of rotate_half is -rotate_half.)
-        cos, sin = self._tables(dY.shape[-2], start_pos)
-        return dY * cos - self._rotate_half(dY * sin)
+        pass
 
     def update(self, lr):
         # No trainable parameters.

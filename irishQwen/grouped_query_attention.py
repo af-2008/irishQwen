@@ -44,60 +44,25 @@ class GroupedQueryAttention:
         self.rope = rope                    # shared RotaryEmbedding
 
         scale = math.sqrt(1.0 / self.C)
-        self.Wq = torch.randn(self.H * self.Dh, self.C, device=self.device) * scale
-        self.Wk = torch.randn(self.H_kv * self.Dh, self.C, device=self.device) * scale
-        self.Wv = torch.randn(self.H_kv * self.Dh, self.C, device=self.device) * scale
-        self.Wo = torch.randn(self.C, self.H * self.Dh, device=self.device) * math.sqrt(1.0 / (self.H * self.Dh))
 
         # QK-Norm: one gamma of size Dh, shared across heads
-        self.q_norm = RMSNorm(self.Dh, device=device)
-        self.k_norm = RMSNorm(self.Dh, device=device)
 
     def _split_heads(self, X, n_heads):
-        B, T, _ = X.shape
-        return X.view(B, T, n_heads, self.Dh).permute(0, 2, 1, 3).contiguous()
+        pass
 
     def _merge_heads(self, Xh):
-        B, H, T, Dh = Xh.shape
-        return Xh.permute(0, 2, 1, 3).contiguous().view(B, T, H * Dh)
+        pass
 
     def _repeat_kv(self, Xh):
-        # (B, H_kv, T, Dh) -> (B, H, T, Dh): kv head j serves query heads j*G ... j*G + G-1
-        return Xh.repeat_interleave(self.G, dim=1)
+        pass
 
     def _sum_kv_groups(self, dXh):
-        # Backward of _repeat_kv: each kv head gets the summed gradient of its G copies
-        B, H, T, Dh = dXh.shape
-        return dXh.view(B, self.H_kv, self.G, T, Dh).sum(dim=2)
+        pass
 
     def forward(self, X, key_pad_mask=None, start_pos=0):
         B, T, _ = X.shape
 
-        Qh = self._split_heads(X @ self.Wq.T, self.H)       # (B, H, T, Dh)
-        Kh = self._split_heads(X @ self.Wk.T, self.H_kv)    # (B, H_kv, T, Dh)
-        Vh = self._split_heads(X @ self.Wv.T, self.H_kv)    # (B, H_kv, T, Dh)
-
         # QK-Norm, then rotate by position
-        Qr = self.rope.forward(self.q_norm.forward(Qh), start_pos)
-        Kr = self.rope.forward(self.k_norm.forward(Kh), start_pos)
-
-        Kr_rep = self._repeat_kv(Kr)
-        Vh_rep = self._repeat_kv(Vh)
-
-        scale = 1.0 / math.sqrt(self.Dh)
-        scores = (Qr @ Kr_rep.transpose(-1, -2)) * scale    # (B, H, T, T)
-
-        if self.causal:
-            tril = torch.tril(torch.ones(T, T, device=X.device, dtype=torch.bool))
-            scores = scores.masked_fill(~tril.unsqueeze(0).unsqueeze(0), float("-inf"))
-
-        if key_pad_mask is not None:
-            mask_k = key_pad_mask.unsqueeze(1).unsqueeze(1).expand(B, self.H, T, T)
-            scores = scores.masked_fill(mask_k, float("-inf"))
-
-        attn = F.softmax(scores, dim=-1)
-        ctx = self._merge_heads(attn @ Vh_rep)              # (B, T, H*Dh)
-        Y = ctx @ self.Wo.T                                 # (B, T, C)
 
         self.cache = GroupedQueryAttention.Grad_Info(
             x=X,
@@ -108,66 +73,30 @@ class GroupedQueryAttention:
             key_pad_mask=key_pad_mask,
             start_pos=start_pos,
         )
+
         return Y
 
     def backward(self, dY):
-        B, T, C = dY.shape
-        cache = self.cache
 
         # ---- Output projection ----
-        self.dWo = dY.reshape(-1, C).T @ cache.ctx.reshape(-1, self.H * self.Dh)
-        dctx = dY @ self.Wo
 
         # ---- attn @ V ----
-        dctx_heads = self._split_heads(dctx, self.H)
-        dattn = dctx_heads @ cache.vh_rep.transpose(-1, -2)
-        dVh_rep = cache.attn.transpose(-1, -2) @ dctx_heads
 
         # ---- Softmax ----
-        tmp = (dattn * cache.attn).sum(dim=-1, keepdim=True)
-        dscores = (dattn - tmp) * cache.attn
-
-        if self.causal:
-            tril = torch.tril(torch.ones(T, T, device=dY.device, dtype=torch.bool))
-            dscores = dscores.masked_fill(~tril.unsqueeze(0).unsqueeze(0), 0.0)
-
-        if cache.key_pad_mask is not None:
-            mask_k = cache.key_pad_mask.unsqueeze(1).unsqueeze(1).expand(B, self.H, T, T)
-            dscores = dscores.masked_fill(mask_k, 0.0)
 
         # ---- Q @ K^T ----
-        scale = 1.0 / math.sqrt(self.Dh)
-        dQr = (dscores @ cache.kr_rep) * scale
-        dKr_rep = (dscores.transpose(-1, -2) @ cache.qr) * scale
 
         # ---- Un-repeat K/V (sum gradients over each group) ----
-        dKr = self._sum_kv_groups(dKr_rep)
-        dVh = self._sum_kv_groups(dVh_rep)
 
         # ---- RoPE, then QK-Norm ----
-        dQh = self.q_norm.backward(self.rope.backward(dQr, cache.start_pos))
-        dKh = self.k_norm.backward(self.rope.backward(dKr, cache.start_pos))
 
-        dQ = self._merge_heads(dQh)     # (B, T, H*Dh)
-        dK = self._merge_heads(dKh)     # (B, T, H_kv*Dh)
-        dV = self._merge_heads(dVh)     # (B, T, H_kv*Dh)
 
         # ---- Q/K/V projections ----
-        x_flat = cache.x.reshape(-1, self.C)
-        self.dWq = dQ.reshape(-1, self.H * self.Dh).T @ x_flat
-        self.dWk = dK.reshape(-1, self.H_kv * self.Dh).T @ x_flat
-        self.dWv = dV.reshape(-1, self.H_kv * self.Dh).T @ x_flat
 
-        dX = dQ @ self.Wq + dK @ self.Wk + dV @ self.Wv
         return dX
 
     def update(self, lr):
-        self.Wq -= lr * self.dWq
-        self.Wk -= lr * self.dWk
-        self.Wv -= lr * self.dWv
-        self.Wo -= lr * self.dWo
-        self.q_norm.update(lr)
-        self.k_norm.update(lr)
+        pass
 
     def load_from_qwen3_tensors(self, q_proj, k_proj, v_proj, o_proj, q_norm, k_norm):
         """
@@ -191,3 +120,24 @@ class GroupedQueryAttention:
         self.Wo = o_proj.to(self.device).contiguous()
         self.q_norm.gamma = q_norm.to(self.device).contiguous()
         self.k_norm.gamma = k_norm.to(self.device).contiguous()
+
+    def forward_kv(self, x_new: torch.Tensor, kv_cache, start_pos: int):
+        # During training, forward handles the whole sequence and saves what backward needs.
+        # When generating, we keep the old keys and values so we only compute the new tokens.
+        # Same weights, just reusing work! The first call handles the whole prompt.
+        """
+        Run attention for T new tokens (shape (1, T, C)) whose first token sits at
+        absolute position `start_pos`.
+          Prefill: the whole prompt at once (T = prompt length, start_pos = 0)
+          Decode:  one token at a time       (T = 1, start_pos = tokens so far)
+        """
+        T = x_new.shape[1]
+
+        # RoPE needs the tokens' real positions, not 0!
+
+        # Cache the already-rotated keys, so old keys never need re-rotating.
+
+        # Causal mask: new token i (at position start_pos + i) may see keys 0 ... start_pos + i.
+        # During decode (T = 1) this masks nothing -- the cache only holds the past.
+
+        return ctx @ self.Wo.T

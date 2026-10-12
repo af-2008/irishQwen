@@ -1,10 +1,34 @@
+from dataclasses import dataclass
+import torch
+
 from .rms_norm import RMSNorm
 from .swiglu import SwiGLU
-from .qwen_moe import QwenSparseMoE
 from .grouped_query_attention import GroupedQueryAttention
 
+@dataclass
+class SimpleKVCache:
+    """
+    Tiny educational KV cache for one transformer block.
+
+    We only support batch size = 1. Prefill appends the whole prompt at once,
+    then each decode step appends one token.
+    With GQA we only cache the H_kv key/value heads, not all H query heads:
+      (1, n_kv_heads, cached_tokens, head_dim)
+    For Qwen3-0.6B that is 8 heads instead of 16 -> half the memory.
+    """
+
+    k: torch.Tensor | None = None
+    v: torch.Tensor | None = None
+
+    def append(self, k_new: torch.Tensor, v_new: torch.Tensor):
+        pass
+
+    def clear(self):
+        pass
+
+
 class QwenTransformer:
-    attention_class = GroupedQueryAttention   # QwenTransformerWithKVCache swaps in a cached version
+    attention_class = GroupedQueryAttention
 
     def __init__(
         self,
@@ -14,8 +38,6 @@ class QwenTransformer:
         n_heads=16,
         n_kv_heads=8,
         head_dim=128,
-        n_experts=0,
-        top_k=2,
         device='cpu',
     ):
         """
@@ -24,54 +46,17 @@ class QwenTransformer:
 
         model_dim: C (embedding size)
         rope: shared RotaryEmbedding
-        n_experts: 0 = dense SwiGLU FFN (Qwen3), > 0 = sparse MoE FFN (Qwen3-MoE)
         """
         self.device = device
 
-        self.LN1 = RMSNorm(model_dim, device)
-        self.SA = self.attention_class(
-            model_dim, n_heads=n_heads, n_kv_heads=n_kv_heads, head_dim=head_dim, rope=rope, device=device
-        )
-        self.LN2 = RMSNorm(model_dim, device)
-        if n_experts > 0:
-            self.FFN = QwenSparseMoE(model_dim, ffn_dim, n_experts=n_experts, top_k=top_k, device=device)
-        else:
-            self.FFN = SwiGLU(model_dim, ffn_dim, device)
-
     def forward(self, X, key_pad_mask=None):
-        resid = X
-
-        X = self.LN1.forward(X)
-        X = self.SA.forward(X, key_pad_mask=key_pad_mask)
-
-        X = X + resid
-        resid = X
-
-        X = self.LN2.forward(X)
-        X = self.FFN.forward(X)
-
-        return X + resid
+        pass
 
     def backward(self, dY):
-        d_resid = dY
-
-        dY = self.FFN.backward(dY)
-        dY = self.LN2.backward(dY)
-
-        dY = dY + d_resid
-
-        d_resid = dY
-
-        dY = self.SA.backward(dY)
-        dY = self.LN1.backward(dY)
-
-        return dY + d_resid
+        pass
 
     def update(self, lr):
-        self.LN1.update(lr)
-        self.SA.update(lr)
-        self.LN2.update(lr)
-        self.FFN.update(lr)
+        pass
 
     def load_from_qwen3_block(self, block_state):
         self.LN1.gamma = block_state["input_layernorm.weight"].to(self.device).contiguous()
@@ -86,14 +71,11 @@ class QwenTransformer:
             block_state["self_attn.k_norm.weight"],
         )
 
-        if isinstance(self.FFN, QwenSparseMoE):
-            self.FFN.load_from_qwen3_tensors(block_state["mlp.gate.weight"], block_state["mlp.experts"])
-        else:
-            self.FFN.load_from_qwen3_tensors(
-                block_state["mlp.gate_proj.weight"],
-                block_state["mlp.up_proj.weight"],
-                block_state["mlp.down_proj.weight"],
-            )
+        self.FFN.load_from_qwen3_tensors(
+            block_state["mlp.gate_proj.weight"],
+            block_state["mlp.up_proj.weight"],
+            block_state["mlp.down_proj.weight"],
+        )
 
     def save_to_qwen3_block(self):
         """Inverse of load_from_qwen3_block: this block's weights as an HF-style dict."""
@@ -108,15 +90,22 @@ class QwenTransformer:
             "self_attn.k_norm.weight": self.SA.k_norm.gamma.cpu(),
         }
 
-        if isinstance(self.FFN, QwenSparseMoE):
-            block_state["mlp.gate.weight"] = self.FFN.router.W.cpu()
-            block_state["mlp.experts"] = [
-                {"gate_proj": e.gate.W.cpu(), "up_proj": e.up.W.cpu(), "down_proj": e.down.W.cpu()}
-                for e in self.FFN.experts
-            ]
-        else:
-            block_state["mlp.gate_proj.weight"] = self.FFN.gate.W.cpu()
-            block_state["mlp.up_proj.weight"] = self.FFN.up.W.cpu()
-            block_state["mlp.down_proj.weight"] = self.FFN.down.W.cpu()
+        block_state["mlp.gate_proj.weight"] = self.FFN.gate.W.cpu()
+        block_state["mlp.up_proj.weight"] = self.FFN.up.W.cpu()
+        block_state["mlp.down_proj.weight"] = self.FFN.down.W.cpu()
 
         return block_state
+
+    def reset_kv_cache(self):
+        self.kv_cache.clear()
+
+    def forward_kv(self, x_new: torch.Tensor, start_pos: int):
+        # During training, forward handles the whole sequence and saves what backward needs.
+        # When generating, we keep the old keys and values so we only compute the new tokens.
+        # Same weights, just reusing work! The first call handles the whole prompt.
+        """
+        Cached forward for generation (prefill chunk or one decode token).
+        x_new shape: (1, T, C)
+        """
+
+        pass

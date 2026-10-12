@@ -18,32 +18,14 @@ class SwiGLU:
     def __init__(self, model_dim, ffn_dim, device='cpu'):
         self.device = device
 
-        self.gate = LinearLayer(model_dim, ffn_dim, device, bias=False)
-        self.up   = LinearLayer(model_dim, ffn_dim, device, bias=False)
-        self.act  = SiLU()
-        self.down = LinearLayer(ffn_dim, model_dim, device, bias=False)
-
     def forward(self, X):
-        self.g = self.act.forward(self.gate.forward(X))     # (B, T, F)
-        self.u = self.up.forward(X)                          # (B, T, F)
-
-        return self.down.forward(self.g * self.u)
+        pass
 
     def backward(self, dY):
-        dH = self.down.backward(dY)                          # (B, T, F)
-
-        # Elementwise gate:  H = g * u
-        dg = dH * self.u
-        du = dH * self.g
-
-        # X fed both branches, so its gradient is the sum of both
-        dX = self.gate.backward(self.act.backward(dg)) + self.up.backward(du)
-        return dX
+        pass
 
     def update(self, lr):
-        self.gate.update(lr)
-        self.up.update(lr)
-        self.down.update(lr)
+        pass
 
     def load_from_qwen3_tensors(self, gate_proj, up_proj, down_proj):
         # HF nn.Linear weights are already (out, in) == LinearLayer.W. No transpose!

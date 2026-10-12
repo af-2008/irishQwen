@@ -2,27 +2,24 @@ import torch
 import torch.nn.functional as F
 from statistics import mean
 from tqdm import tqdm
+
+from .qwen_transformer import QwenTransformer
+
 from .embedding import EmbeddingLayer
 from .linear_layer import LinearLayer
-from .qwen_transformer import QwenTransformer
 from .rotary_embedding import RotaryEmbedding
 from .rms_norm import RMSNorm
 
-class IrishQwen:
+class IrishQwen():
     """
     IrishChat rebuilt with the Qwen3 architecture.
-
-    What changed from IrishChat (GPT-2):
-      - No learned positional embedding: RoPE rotates Q and K inside attention
-      - LayerNorm -> RMSNorm
-      - Multi-head attention -> Grouped-Query Attention with QK-Norm, no biases
-      - GeLU FFN -> SwiGLU FFN (or a sparse Mixture-of-Experts with n_experts > 0)
-
-    Training, loss, accuracy, and sampling are implemented directly in this class.
-
     Defaults match Qwen3-0.6B.
     """
-    block_class = QwenTransformer   # IrishQwenKV swaps in a KV-cache block
+    block_class = QwenTransformer
+
+    def reset_kv_cache(self):
+        for block in self.transformer_blocks:
+            block.reset_kv_cache()
 
     # Qwen3 special tokens for thinking mode
     THINK_START_ID = 151667         # <think>
@@ -55,6 +52,8 @@ class IrishQwen:
         top_k: int = 2,
         padding_idx: int = 151643,
     ):
+        if n_experts != 0:
+            raise ValueError("This teaching version supports dense Qwen3 only (n_experts=0).")
         self.padding_idx = padding_idx
         # Remember the shape so save_converted_qwen3_checkpoint can rebuild this model
         self.config = dict(
@@ -75,8 +74,6 @@ class IrishQwen:
                 n_heads=n_heads,
                 n_kv_heads=n_kv_heads,
                 head_dim=head_dim,
-                n_experts=n_experts,
-                top_k=top_k,
                 device=self.device,
             )
             for _ in range(n_layers)
@@ -143,6 +140,41 @@ class IrishQwen:
             },
             checkpoint_path,
         )
+
+    def _forward_cached(self, token_ids, start_pos: int) -> torch.Tensor:
+        """
+        Run token_ids (list of ints) through the model, reading from and appending
+        to every block's KV cache. The first token sits at absolute position start_pos.
+        Returns next-token probabilities for the LAST position only: (1, 1, vocab_size).
+        """
+        if start_pos + len(token_ids) > self.ctx_len:
+            raise ValueError(f"positions up to {start_pos + len(token_ids)} exceed ctx_len={self.ctx_len}")
+
+        x_ids = torch.tensor([token_ids], dtype=torch.long, device=self.device)
+        x = self.token_embedding.forward(x_ids)                 # (1, T, C)
+
+        for block in self.transformer_blocks:
+            x = block.forward_kv(x, start_pos)
+
+        # Only the last position predicts the next token. Skipping the others
+        # matters: the lm_head is (C x 151k), the most expensive matmul in the model.
+        x = self.final_ln.forward(x[:, -1:, :])
+        logits = self.lm_head.forward(x)
+        return F.softmax(logits, dim=-1)
+
+    def prefill(self, prompt_tokens) -> torch.Tensor:
+        """
+        Phase 1: process the whole prompt in ONE parallel forward pass.
+        Fills every block's KV cache and returns the probs for the first new token.
+        """
+        self.reset_kv_cache()
+        return self._forward_cached(prompt_tokens, start_pos=0)
+
+    def decode_step(self, token_id: int, position: int) -> torch.Tensor:
+        """
+        Phase 2: process ONE new token, attending to everything in the cache.
+        """
+        return self._forward_cached([token_id], start_pos=position)
 
     def forward(self, X, eval=False):
         """
@@ -260,47 +292,39 @@ class IrishQwen:
         thinking_budget=None,
     ):
         """
-        Autoregressive generation.
+        Generate text using per-block KV cache.
 
-        Args:
-            prompt_tokens: list of int token IDs (from tokenizer.encode)
-            max_new_tokens: maximum number of tokens to generate
-            temperature: 0 = greedy (always pick most likely),
-                         >0 = sample (higher = more random)
-            eos_token_id: Qwen3 chat models end their turn with <|im_end|> (151645)
-            top_k, top_p: optional sampling filters (see sample())
-            thinking_budget: max tokens allowed inside <think> ... </think> (None = unlimited)
-        Returns:
-            list of int token IDs (prompt + generated)
+        1) Prefill: run the whole prompt at once (fills KV cache).
+        2) Decode: generate new tokens one at a time using cached K/V.
         """
-        tokens = torch.tensor([prompt_tokens], dtype=torch.long, device=self.device)
+        if len(prompt_tokens) == 0:
+            raise ValueError("prompt_tokens must contain at least one token")
+
+        # Keep only the rightmost context window.
+        tokens = list(prompt_tokens[-self.ctx_len :])
+
+        probs = self.prefill(tokens)
+        current_len = len(tokens)
 
         for _ in range(max_new_tokens):
-            # Truncate to context window if the sequence is too long
-            x = tokens[:, -self.ctx_len:]
-
-            # Forward pass → probabilities (B, T, V)
-            probs = self.forward(x, eval=True)
-
-            # We only care about the LAST position's prediction
-            next_probs = probs[0, -1, :]        # (V,)
-
-            # Pick the next token
+            next_probs = probs[0, -1, :]
             next_token = self.pick_next_token(
-                next_probs, tokens[0].tolist(), temperature, top_k, top_p, thinking_budget
+                next_probs, tokens, temperature, top_k, top_p, thinking_budget
             )
 
-            # Append to the sequence
-            tokens = torch.cat([
-                tokens,
-                torch.tensor([[next_token]], dtype=torch.long, device=self.device)
-            ], dim=1)
-
-            # Stop when EOS is produced for the active tokenizer.
+            tokens.append(next_token)
             if eos_token_id is not None and next_token == eos_token_id:
                 break
 
-        return tokens[0].tolist()
+            # For simplicity, this educational version enforces ctx_len hard.
+            # A production version would slide/truncate cache instead.
+            if current_len >= self.ctx_len:
+                break
+
+            probs = self.decode_step(next_token, current_len)
+            current_len += 1
+
+        return tokens
 
     def softmax(self, X):
         """Normalize logits into probabilities over the vocabulary."""

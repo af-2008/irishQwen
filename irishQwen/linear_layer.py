@@ -1,8 +1,6 @@
 import math
 import torch
 
-# TODO: Implement the LinearLayer class (Consider copying from Homework04)
-
 class LinearLayer:
     """
     A fully connected (dense) layer that performs a linear transformation.
@@ -31,9 +29,6 @@ class LinearLayer:
         """
         self.device = device
 
-        self.W = torch.randn(output_dim, input_dim, device=self.device) * math.sqrt(2.0 / input_dim)
-        self.b = torch.randn(1, output_dim, device=self.device) * math.sqrt(2.0 / input_dim) if bias else None
-
     def forward(self, X):
         """
         Compute the forward pass of the linear layer.
@@ -48,14 +43,9 @@ class LinearLayer:
             The input X is stored for use during backpropagation.
         """
 
-        # TODO: Store the input and calculate the output of the linear layer
-        self.X = X
+        # Store the input and calculate the output of the linear layer
+        pass
 
-        Z = X @ self.W.T
-        if self.b is not None:
-            Z = Z + self.b
-
-        return Z
 
     def backward(self, dY):
         """
@@ -74,20 +64,14 @@ class LinearLayer:
         """
 
         # dY_flat shape: (batch_size * sequence_length, output_dim)
-        dY_flat = dY.reshape(-1, dY.shape[-1])
 
         # X_flat shape: (batch_size * sequence_length, input_dim)
-        X_flat  = self.X.reshape(-1, self.X.shape[-1])
 
         # dW shape: (output_dim, input_dim)
-        self.dW = dY_flat.T @ X_flat
 
-        if self.b is not None:
-            self.db = dY.sum(dim=(0, 1))  # (Out,)
+        pass
 
-        dX = dY @ self.W  # (B, T, In) because (B,T,Out) @ (Out,In)
 
-        return dX
 
     def update(self, lr):
         """
@@ -100,7 +84,4 @@ class LinearLayer:
             None
         """
 
-        # TODO: Update the weights and biases of the layer using the learning rate
-        self.W -= lr * self.dW
-        if self.b is not None:
-            self.b -= lr * self.db
+        # Update the weights and biases of the layer using the learning rate
