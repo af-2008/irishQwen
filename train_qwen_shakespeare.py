@@ -5,9 +5,9 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 
-from irishGPT.irishQwen import IrishQwen
-from irishGPT.tokenizer import Regex_Tokenizer
-from irishGPT import optimizers
+from irishQwen.irishQwen import IrishQwen
+from irishQwen.tokenizer import Regex_Tokenizer
+from irishQwen import optimizers
 
 
 def load_shakespeare(path):

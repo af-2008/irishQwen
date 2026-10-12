@@ -39,8 +39,8 @@ python scripts/import_qwen3.py
 This downloads model weights from Hugging Face and creates a roughly 2.2 GB float32 checkpoint plus tokenizer assets in `Datasets/`. Allow sufficient disk space and memory for both the original and converted weights. These generated assets are not included in the repository.
 
 ```python
-from irishGPT.irishQwen_kv import IrishQwenKV
-from irishGPT.qwen_tokenizer import QwenTokenizer
+from irishQwen.irishQwen_kv import IrishQwenKV
+from irishQwen.qwen_tokenizer import QwenTokenizer
 
 checkpoint = "Datasets/qwen3_0.6b_converted.pt"
 tokenizer = QwenTokenizer("Datasets/qwen3_tokenizer_assets/tokenizer.json")
@@ -53,12 +53,12 @@ print(tokenizer.decode(tokens))
 
 ## Code map
 
-- `irishGPT/irishQwen.py`: model, manual training operations, checkpoints, and sampling.
-- `irishGPT/irishQwen_kv.py`: cached inference with prefill and decode.
-- `irishGPT/qwen_transformer*.py`: dense/MoE decoder blocks and cached attention.
-- `irishGPT/grouped_query_attention.py`, `rotary_embedding.py`, `rms_norm.py`, `swiglu.py`, and `qwen_moe.py`: architectural building blocks.
-- `irishGPT/qwen_tokenizer.py`: byte-level BPE tokenizer and chat prompt formatting.
+- `irishQwen/irishQwen.py`: model, manual training operations, checkpoints, and sampling.
+- `irishQwen/irishQwen_kv.py`: cached inference with prefill and decode.
+- `irishQwen/qwen_transformer*.py`: dense/MoE decoder blocks and cached attention.
+- `irishQwen/grouped_query_attention.py`, `rotary_embedding.py`, `rms_norm.py`, `swiglu.py`, and `qwen_moe.py`: architectural building blocks.
+- `irishQwen/qwen_tokenizer.py`: byte-level BPE tokenizer and chat prompt formatting.
 - `scripts/import_qwen3.py`: Hugging Face checkpoint conversion.
 - `train_qwen_shakespeare.py`: small-model training example.
 
-The `irishGPT` package name is retained for compatibility with the course imports. Qwen is self-contained; no GPT-2 model or unrelated teaching modules are required. `tokenizer.py` and the Shakespeare data support the small-model training example.
+The `irishQwen` package is self-contained; no GPT-2 model or unrelated teaching modules are required. `tokenizer.py` and the Shakespeare data support the small-model training example.

@@ -5,7 +5,7 @@ def find_parameters(obj, seen=None):
     """
     Walk a model and yield (layer, name) for every trainable tensor.
 
-    We rely on the convention used by every layer in irishGPT: the gradient of
+    We rely on the convention used by every layer in irishQwen: the gradient of
     parameter `X` is stored on the same layer as `dX` (W/dW, b/db, gamma/dgamma, ...).
     So a parameter is any tensor attribute that has a matching gradient attribute.
     """
