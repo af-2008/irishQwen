@@ -2,10 +2,31 @@ import json
 import unicodedata
 import regex as re
 
-from .gpt2_tokenizer import GPT2Tokenizer, bytes_to_unicode
+def bytes_to_unicode():
+    """
+    GPT-2 reversible byte-to-unicode map.
+    """
+    bs = list(range(ord("!"), ord("~") + 1)) + list(range(ord("¡"), ord("¬") + 1)) + list(range(ord("®"), ord("ÿ") + 1))
+    cs = bs[:]
+    n = 0
+    for b in range(256):
+        if b not in bs:
+            bs.append(b)
+            cs.append(256 + n)
+            n += 1
+    cs = [chr(c) for c in cs]
+    return dict(zip(bs, cs))
+
+def get_pairs(word):
+    pairs = set()
+    prev_char = word[0]
+    for char in word[1:]:
+        pairs.add((prev_char, char))
+        prev_char = char
+    return pairs
 
 
-class QwenTokenizer(GPT2Tokenizer):
+class QwenTokenizer:
     """
     Qwen's tokenizer is the same byte-level BPE as GPT-2 (same bpe() / decode()),
     with three differences:
@@ -70,3 +91,45 @@ class QwenTokenizer(GPT2Tokenizer):
         if not enable_thinking:
             prompt += "<think>\n\n</think>\n\n"
         return self.encode(prompt)
+
+    def bpe(self, token):
+        if token in self.cache:
+            return self.cache[token]
+
+        word = tuple(token)
+        pairs = get_pairs(word)
+        if not pairs:
+            return token
+
+        while True:
+            bigram = min(pairs, key=lambda p: self.bpe_ranks.get(p, float("inf")))
+            if bigram not in self.bpe_ranks:
+                break
+
+            first, second = bigram
+            new_word = []
+            i = 0
+            while i < len(word):
+                try:
+                    j = word.index(first, i)
+                    new_word.extend(word[i:j])
+                    i = j
+                except ValueError:
+                    new_word.extend(word[i:])
+                    break
+
+                if i < len(word) - 1 and word[i] == first and word[i + 1] == second:
+                    new_word.append(first + second)
+                    i += 2
+                else:
+                    new_word.append(word[i])
+                    i += 1
+
+            word = tuple(new_word)
+            if len(word) == 1:
+                break
+            pairs = get_pairs(word)
+
+        word = " ".join(word)
+        self.cache[token] = word
+        return word

@@ -46,7 +46,7 @@ checkpoint = "Datasets/qwen3_0.6b_converted.pt"
 tokenizer = QwenTokenizer("Datasets/qwen3_tokenizer_assets/tokenizer.json")
 model = IrishQwenKV.from_checkpoint_config(checkpoint)
 model.load_converted_qwen3_checkpoint(checkpoint)
-prompt = tokenizer.encode(tokenizer.chat_prompt("What is a transformer?"))
+prompt = tokenizer.chat_prompt("What is a transformer?")
 tokens = model.chat(prompt, max_new_tokens=100, **model.NON_THINKING_SAMPLING)
 print(tokenizer.decode(tokens))
 ```
@@ -61,4 +61,4 @@ print(tokenizer.decode(tokens))
 - `scripts/import_qwen3.py`: Hugging Face checkpoint conversion.
 - `train_qwen_shakespeare.py`: small-model training example.
 
-The `irishGPT` package name and shared GPT teaching modules are retained because the Qwen implementation inherits training behavior from `IrishChat` and reuses those components. Source files were copied unchanged from the course implementation.
+The `irishGPT` package name is retained for compatibility with the course imports. Qwen is self-contained; no GPT-2 model or unrelated teaching modules are required. `tokenizer.py` and the Shakespeare data support the small-model training example.

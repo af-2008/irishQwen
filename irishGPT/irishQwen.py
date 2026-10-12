@@ -1,12 +1,14 @@
 import torch
-from .irishChat import IrishChat
+import torch.nn.functional as F
+from statistics import mean
+from tqdm import tqdm
 from .embedding import EmbeddingLayer
 from .linear_layer import LinearLayer
 from .qwen_transformer import QwenTransformer
 from .rotary_embedding import RotaryEmbedding
 from .rms_norm import RMSNorm
 
-class IrishQwen(IrishChat):
+class IrishQwen:
     """
     IrishChat rebuilt with the Qwen3 architecture.
 
@@ -16,8 +18,7 @@ class IrishQwen(IrishChat):
       - Multi-head attention -> Grouped-Query Attention with QK-Norm, no biases
       - GeLU FFN -> SwiGLU FFN (or a sparse Mixture-of-Experts with n_experts > 0)
 
-    The training loop and loss/accuracy (train, cross_entropy, get_accuracy,
-    softmax) are inherited from IrishChat unchanged -- only the model body differs.
+    Training, loss, accuracy, and sampling are implemented directly in this class.
 
     Defaults match Qwen3-0.6B.
     """
@@ -54,7 +55,6 @@ class IrishQwen(IrishChat):
         top_k: int = 2,
         padding_idx: int = 151643,
     ):
-        # Note: we deliberately don't call IrishChat.__init__ -- it would build GPT-2 layers.
         self.padding_idx = padding_idx
         # Remember the shape so save_converted_qwen3_checkpoint can rebuild this model
         self.config = dict(
@@ -301,3 +301,69 @@ class IrishQwen(IrishChat):
                 break
 
         return tokens[0].tolist()
+
+    def softmax(self, X):
+        """Normalize logits into probabilities over the vocabulary."""
+        return F.softmax(X, dim=-1)
+
+    def cross_entropy(self, Y_hat, Y):
+        """Mean cross-entropy over non-padding tokens in (B, T, V) tensors."""
+
+        log_probs = torch.log(Y_hat.clamp_min(1e-12))
+        token_loss = -(Y * log_probs).sum(dim=2)  # (B, T)
+        mask = (Y.argmax(dim=-1) != self.padding_idx).float()
+        masked_loss = token_loss * mask
+        normalizer = mask.sum().clamp_min(1.0)
+        return masked_loss.sum() / normalizer
+
+    def get_accuracy(self, Y_hat, Y):
+        """Fraction of correctly predicted non-padding tokens."""
+
+        # labels: Y (B, T, V) one-hot
+        Y_idx = Y.argmax(dim=-1)                # (B, T)
+        preds = Y_hat.argmax(dim=-1)
+        mask = (Y_idx != self.padding_idx).float()
+        correct = (preds == Y_idx).float() * mask
+        normalizer = mask.sum().clamp_min(1.0)
+        return correct.sum() / normalizer
+
+    def train(self, train_loader, epochs=100, learning_rate=0.001, verbose=True, optimizer=None):
+        """Train over batches of token IDs and one-hot targets; return epoch loss and accuracy."""
+        loss_history = []
+        accuracy_history = []
+
+        for i in tqdm(range(epochs), desc="Epochs"):
+            batch_losses = []
+            batch_accuracies = []
+
+            for X_batch, Y_batch in tqdm(train_loader, desc="Batches"):
+                # Forward propagation
+                Y_hat_batch = self.forward(X_batch)
+
+                # Calculate metrics for the whole epoch
+                loss = self.cross_entropy(Y_hat_batch, Y_batch)
+                accuracy = self.get_accuracy(Y_hat_batch, Y_batch)
+
+                batch_losses.append(loss.item())
+                batch_accuracies.append(accuracy.item())
+
+                # Backward propagation
+                self.backward(Y_hat_batch, Y_batch)
+
+                # Update parameters
+                if optimizer is not None:
+                    optimizer.step()        # e.g. optimizers.Adam(model) -- see optimizers.py
+                else:
+                    self.update(learning_rate)
+
+            loss_history.append(mean(batch_losses))
+            accuracy_history.append(mean(batch_accuracies))
+
+            if verbose and i % max(1, epochs // 10) == 0:
+                print(f"Epoch {i+1}/{epochs}")
+                print(f"loss: {loss_history[-1]:.5f}")
+                print(f"accuracy: {accuracy_history[-1]:.5f}")
+                print('Output test:')
+                print("-" * 30)
+
+        return {'loss_history': loss_history, 'accuracy_history': accuracy_history}
