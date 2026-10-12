@@ -28,9 +28,11 @@ class RMSNorm:
 
     def forward(self, X):
         # y = gamma * x / sqrt(mean(x^2) + eps)
-        pass
+        rms = torch.sqrt((X * X).mean(dim=-1, keepdim=True) + self.eps)
+        X_hat = X / rms
 
         # Cache for backward
+        self.cache = RMSNorm.Grad_Info(x_hat=X_hat, rms=rms)
 
         return self.gamma * X_hat
 
@@ -38,4 +40,5 @@ class RMSNorm:
         return dX
 
     def update(self, lr):
-        pass
+        self.gamma -= lr * self.dgamma
+        
